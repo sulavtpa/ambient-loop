@@ -1,1 +1,174 @@
-<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Ambient Loop</title></head><body><main><h1>Ambient Loop</h1><p>Your GitHub Pages site is ready.</p></main></body></html>
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Welcome</title>
+<style>
+  html, body {
+    margin: 0; padding: 0; width: 100%; height: 100%;
+    background: #000; overflow: hidden; cursor: none;
+  }
+  #bg {
+    position: fixed; inset: 0; width: 100vw; height: 100vh;
+    object-fit: cover; background: #000;
+  }
+  #loader {
+    position: fixed; inset: 0; z-index: 10;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    background: #000; color: #fff;
+    font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+    transition: opacity .6s ease;
+  }
+  #loader.hide { opacity: 0; pointer-events: none; }
+  #status { font-size: 1rem; letter-spacing: .08em; opacity: .8; }
+  #bar { width: 220px; height: 3px; background: #333; margin-top: 16px; border-radius: 2px; overflow: hidden; }
+  #fill { height: 100%; width: 0; background: #fff; transition: width .15s; }
+</style>
+</head>
+<body>
+
+<video id="bg" muted loop playsinline preload="auto" disablepictureinpicture></video>
+<audio id="music" loop preload="auto"></audio>
+
+<div id="loader">
+  <div id="status">LOADING…</div>
+  <div id="bar"><div id="fill"></div></div>
+</div>
+
+<script>
+(() => {
+  const video  = document.getElementById('bg');
+  const music  = document.getElementById('music');
+  const loader = document.getElementById('loader');
+  const fill   = document.getElementById('fill');
+
+  let musicStarted = false;   // true once music has actually begun playing
+  let musicWanted  = false;   // true once we've begun trying to play music
+
+  // ---------- STEP 1: load the video fully, then play it on loop ----------
+  async function loadVideo() {
+    try {
+      const res = await fetch('video.webm');
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      const total = +res.headers.get('Content-Length') || 0;
+      const reader = res.body.getReader();
+      const chunks = [];
+      let got = 0;
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        chunks.push(value);
+        got += value.length;
+        if (total) fill.style.width = (got / total * 100) + '%';
+      }
+      video.src = URL.createObjectURL(new Blob(chunks, { type: 'video/webm' }));
+    } catch (e) {
+      console.warn('Blob preload failed, falling back to direct src', e);
+      video.src = 'video.webm';
+    }
+    await new Promise(resolve => {
+      if (video.readyState >= 4) return resolve();
+      video.addEventListener('canplaythrough', resolve, { once: true });
+      video.load();
+    });
+  }
+
+  // ---------- STEP 2: only after the video is playing, load + play the music ----------
+  async function loadMusic() {
+    musicWanted = true;
+    music.src = 'music.mp3';
+    await new Promise(resolve => {
+      music.addEventListener('canplaythrough', resolve, { once: true });
+      music.addEventListener('error', resolve, { once: true });
+      music.load();
+    });
+    tryMusic();
+  }
+
+  function tryMusic() {
+    music.play().then(() => {
+      musicStarted = true;
+      onMusicPlaying();
+    }).catch(() => {
+      // Browser blocked autoplay with sound: start on the very first interaction
+      armInteractionStart();
+    });
+  }
+
+  let armed = false;
+  function armInteractionStart() {
+    if (armed) return;
+    armed = true;
+    const go = () => {
+      music.play().then(() => { musicStarted = true; onMusicPlaying(); }).catch(() => {});
+      goFullscreen();
+      ['click', 'touchstart', 'keydown', 'pointerdown'].forEach(e =>
+        document.removeEventListener(e, go, true));
+    };
+    ['click', 'touchstart', 'keydown', 'pointerdown'].forEach(e =>
+      document.addEventListener(e, go, true));
+  }
+
+  // ---------- Run in order: video first, then music ----------
+  loadVideo().then(async () => {
+    await video.play().catch(() => {});
+    loader.classList.add('hide');
+    loadMusic();
+  });
+
+  // ---------- Fullscreen (needs a user gesture, so it happens on first click/tap) ----------
+  function goFullscreen() {
+    const el = document.documentElement;
+    if (document.fullscreenElement) return;
+    try {
+      if (el.requestFullscreen) el.requestFullscreen({ navigationUI: 'hide' }).catch(() => {});
+      else if (el.webkitRequestFullscreen) el.webkitRequestFullscreen();
+    } catch (e) {}
+  }
+  document.addEventListener('click', goFullscreen);
+
+  // ---------- Keep everything playing forever ----------
+  function keepAlive() {
+    if (video.paused && video.readyState >= 2) video.play().catch(() => {});
+    if (musicStarted && music.paused) music.play().catch(() => {});
+  }
+  music.addEventListener('pause',   keepAlive);
+  music.addEventListener('ended',   () => { music.currentTime = 0; keepAlive(); });
+  music.addEventListener('stalled', keepAlive);
+  music.addEventListener('waiting', keepAlive);
+  video.addEventListener('pause',   keepAlive);
+  video.addEventListener('ended',   () => { video.currentTime = 0; keepAlive(); });
+  video.addEventListener('stalled', keepAlive);
+  document.addEventListener('visibilitychange', keepAlive);
+  window.addEventListener('focus', keepAlive);
+  window.addEventListener('pageshow', keepAlive);
+  setInterval(keepAlive, 1000);
+  ['click', 'touchstart', 'keydown'].forEach(evt =>
+    document.addEventListener(evt, keepAlive, { passive: true }));
+
+  // ---------- Wake lock + media session ----------
+  let wakeLock = null;
+  async function requestWakeLock() {
+    try {
+      if ('wakeLock' in navigator) {
+        wakeLock = await navigator.wakeLock.request('screen');
+        wakeLock.addEventListener('release', () => { wakeLock = null; });
+      }
+    } catch (e) {}
+  }
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible' && !wakeLock) requestWakeLock();
+  });
+  requestWakeLock();
+
+  function onMusicPlaying() {
+    if (!('mediaSession' in navigator)) return;
+    navigator.mediaSession.metadata = new MediaMetadata({ title: 'Music' });
+    navigator.mediaSession.setActionHandler('pause', () => music.play());
+    navigator.mediaSession.setActionHandler('play',  () => music.play());
+  }
+})();
+</script>
+</body>
+</html>
